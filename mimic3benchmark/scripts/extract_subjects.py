@@ -22,8 +22,11 @@ parser.add_argument('--quiet', '-q', dest='verbose', action='store_false', help=
 parser.set_defaults(verbose=True)
 parser.add_argument('--test', action='store_true', help='TEST MODE: process only 1000 subjects, 1000000 events.')
 args, _ = parser.parse_known_args()
-
+import datetime
+print(f"{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}Running with Args:", args)
 try:
+    if args.verbose:
+        print('Creating output directory {}...'.format(args.output_path))
     os.makedirs(args.output_path)
 except:
     pass
@@ -78,5 +81,10 @@ break_up_diagnoses_by_subject(phenotypes, args.output_path, subjects=subjects)
 items_to_keep = set(
     [int(itemid) for itemid in dataframe_from_csv(args.itemids_file)['ITEMID'].unique()]) if args.itemids_file else None
 for table in args.event_tables:
-    read_events_table_and_break_up_by_subject(args.mimic3_path, table, args.output_path, items_to_keep=items_to_keep,
-                                              subjects_to_keep=subjects)
+    read_events_table_and_break_up_by_subject(
+        args.mimic3_path, 
+        table, 
+        args.output_path, 
+        items_to_keep=items_to_keep,
+        subjects_to_keep=subjects
+    )

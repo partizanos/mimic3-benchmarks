@@ -12,6 +12,7 @@ from mimic3benchmark.util import dataframe_from_csv
 
 def read_patients_table(mimic3_path):
     pats = dataframe_from_csv(os.path.join(mimic3_path, 'PATIENTS.csv'))
+    pats.columns = [c.upper() for c in pats.columns]
     pats = pats[['SUBJECT_ID', 'GENDER', 'DOB', 'DOD']]
     pats.DOB = pd.to_datetime(pats.DOB)
     pats.DOD = pd.to_datetime(pats.DOD)
@@ -20,6 +21,8 @@ def read_patients_table(mimic3_path):
 
 def read_admissions_table(mimic3_path):
     admits = dataframe_from_csv(os.path.join(mimic3_path, 'ADMISSIONS.csv'))
+    admits.columns = [c.upper() for c in admits.columns]
+
     admits = admits[['SUBJECT_ID', 'HADM_ID', 'ADMITTIME', 'DISCHTIME', 'DEATHTIME', 'ETHNICITY', 'DIAGNOSIS']]
     admits.ADMITTIME = pd.to_datetime(admits.ADMITTIME)
     admits.DISCHTIME = pd.to_datetime(admits.DISCHTIME)
@@ -29,6 +32,9 @@ def read_admissions_table(mimic3_path):
 
 def read_icustays_table(mimic3_path):
     stays = dataframe_from_csv(os.path.join(mimic3_path, 'ICUSTAYS.csv'))
+    stays = dataframe_from_csv(os.path.join(mimic3_path, 'ICUSTAYS.csv'))
+    stays.columns = [c.upper() for c in stays.columns]
+
     stays.INTIME = pd.to_datetime(stays.INTIME)
     stays.OUTTIME = pd.to_datetime(stays.OUTTIME)
     return stays
@@ -36,21 +42,22 @@ def read_icustays_table(mimic3_path):
 
 def read_icd_diagnoses_table(mimic3_path):
     codes = dataframe_from_csv(os.path.join(mimic3_path, 'D_ICD_DIAGNOSES.csv'))
+    codes.columns = [c.upper() for c in codes.columns]
     codes = codes[['ICD9_CODE', 'SHORT_TITLE', 'LONG_TITLE']]
+    codes.columns = [c.upper() for c in codes.columns]
     diagnoses = dataframe_from_csv(os.path.join(mimic3_path, 'DIAGNOSES_ICD.csv'))
+    diagnoses.columns = [c.upper() for c in diagnoses.columns]
     diagnoses = diagnoses.merge(codes, how='inner', left_on='ICD9_CODE', right_on='ICD9_CODE')
     diagnoses[['SUBJECT_ID', 'HADM_ID', 'SEQ_NUM']] = diagnoses[['SUBJECT_ID', 'HADM_ID', 'SEQ_NUM']].astype(int)
     return diagnoses
 
 
 def read_events_table_by_row(mimic3_path, table):
-    nb_rows = {'chartevents': 330712484, 'labevents': 27854056, 'outputevents': 4349219}
-    reader = csv.DictReader(open(os.path.join(mimic3_path, table.upper() + '.csv'), 'r'))
-    for i, row in enumerate(reader):
-        if 'ICUSTAY_ID' not in row:
-            row['ICUSTAY_ID'] = ''
-        yield row, i, nb_rows[table.lower()]
-
+    with pd.read_csv(os.path.join(mimic3_path, table + '.csv'), chunksize=1000) as reader:
+        for chunk in reader:
+            chunk.columns = [c.upper() for c in chunk.columns]
+            # import pdb; pdb.set_trace()
+            yield chunk
 
 def count_icd_codes(diagnoses, output_path=None):
     codes = diagnoses[['ICD9_CODE', 'SHORT_TITLE', 'LONG_TITLE']].drop_duplicates().set_index('ICD9_CODE')
@@ -76,8 +83,14 @@ def merge_on_subject_admission(table1, table2):
 
 
 def add_age_to_icustays(stays):
-    stays['AGE'] = stays.INTIME.subtract(stays.DOB).apply(lambda s: s / np.timedelta64(1, 's')) / 60./60/24/365
-    stays.ix[stays.AGE < 0, 'AGE'] = 90
+    stays['INTIME'] = pd.to_datetime(stays['INTIME']).dt.date
+    stays['DOB'] = pd.to_datetime(stays['DOB']).dt.date
+    stays['AGE'] = stays.apply(
+        lambda e: (e['INTIME'] - e['DOB']).days/365, axis=1)
+    # stays['AGE'] = stays.INTIME.apply(lambda x: x.date()).subtract(
+    #     stays.DOB).apply(
+    #         lambda s: s / np.timedelta64(1, 's')) / 60./60/24/365
+    stays.loc[(stays.AGE < 0).tolist(), 'AGE'] = 90
     return stays
 
 
@@ -174,25 +187,29 @@ def read_events_table_and_break_up_by_subject(mimic3_path, table, output_path,
     nb_rows_dict = {'chartevents': 330712484, 'labevents': 27854056, 'outputevents': 4349219}
     nb_rows = nb_rows_dict[table.lower()]
 
-    for row, row_no, _ in tqdm(read_events_table_by_row(mimic3_path, table), total=nb_rows,
-                                                        desc='Processing {} table'.format(table)):
+    all_rows=[]                                
+    for chunk in read_events_table_by_row(mimic3_path, table):
+        # tqdm(i, total=nb_rows,desc='Processing {} table'.format(table))
+        for _,row in chunk.iterrows():
+            all_rows.append(row)
+    
+    for row in tqdm(all_rows):
+            if (subjects_to_keep is not None) and (row['SUBJECT_ID'] not in subjects_to_keep):
+                continue
+            if (items_to_keep is not None) and (row['ITEMID'] not in items_to_keep):
+                continue
 
-        if (subjects_to_keep is not None) and (row['SUBJECT_ID'] not in subjects_to_keep):
-            continue
-        if (items_to_keep is not None) and (row['ITEMID'] not in items_to_keep):
-            continue
-
-        row_out = {'SUBJECT_ID': row['SUBJECT_ID'],
-                   'HADM_ID': row['HADM_ID'],
-                   'ICUSTAY_ID': '' if 'ICUSTAY_ID' not in row else row['ICUSTAY_ID'],
-                   'CHARTTIME': row['CHARTTIME'],
-                   'ITEMID': row['ITEMID'],
-                   'VALUE': row['VALUE'],
-                   'VALUEUOM': row['VALUEUOM']}
-        if data_stats.curr_subject_id != '' and data_stats.curr_subject_id != row['SUBJECT_ID']:
-            write_current_observations()
-        data_stats.curr_obs.append(row_out)
-        data_stats.curr_subject_id = row['SUBJECT_ID']
+            row_out = {'SUBJECT_ID': row['SUBJECT_ID'],
+                    'HADM_ID': row['HADM_ID'],
+                    'ICUSTAY_ID': '' if 'ICUSTAY_ID' not in row else row['ICUSTAY_ID'],
+                    'CHARTTIME': row['CHARTTIME'],
+                    'ITEMID': row['ITEMID'],
+                    'VALUE': row['VALUE'],
+                    'VALUEUOM': row['VALUEUOM']}
+            if data_stats.curr_subject_id != '' and data_stats.curr_subject_id != row['SUBJECT_ID']:
+                write_current_observations()
+            data_stats.curr_obs.append(row_out)
+            data_stats.curr_subject_id = row['SUBJECT_ID']
 
     if data_stats.curr_subject_id != '':
         write_current_observations()
