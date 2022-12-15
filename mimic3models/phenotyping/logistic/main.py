@@ -1,7 +1,8 @@
 from __future__ import absolute_import
 from __future__ import print_function
 
-from sklearn.preprocessing import Imputer, StandardScaler
+from sklearn.preprocessing import StandardScaler
+from sklearn.impute import SimpleImputer as Imputer
 from sklearn.linear_model import LogisticRegression
 from mimic3benchmark.readers import PhenotypingReader
 from mimic3models import common_utils
